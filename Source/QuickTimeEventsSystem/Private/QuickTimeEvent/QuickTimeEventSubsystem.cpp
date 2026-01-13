@@ -1,7 +1,9 @@
 // 
 
 #include "QuickTimeEvent/QuickTimeEventSubsystem.h"
-#include "QuickTimeEvent/QuickTimeEventTask.h"
+
+#include "EnhancedInputSubsystems.h"
+#include "QuickTimeEvent/QuickTimeEvent.h"
 #include "QuickTimeEventDeveloperSettings.h"
 
 void UQuickTimeEventSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -24,80 +26,141 @@ void UQuickTimeEventSubsystem::Deinitialize()
     UE_LOG(LogTemp, Log, TEXT("QuickTimeEvent Subsystem Deinitialized"));
 }
 
-void UQuickTimeEventSubsystem::RegisterQuickTimeEventTask(UQuickTimeEventTask* Task)
+void UQuickTimeEventSubsystem::RegisterQuickTimeEvent(UQuickTimeEvent* QTE)
 {
-    if (!Task)
+    if (!QTE)
     {
         return;
     }
-
+    
     // Check if already registered
-    if (ActiveTasks.Contains(Task))
+    if (ActiveQTEs.Contains(QTE))
     {
-        UE_LOG(LogTemp, Warning, TEXT("QuickTimeEvent Task already registered: %s"), 
-            *Task->GetDefinition().QuickTimeEventIdentifier.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("QuickTimeEvent QTE already registered: %s"), 
+            *QTE->GetDefinition().QuickTimeEventIdentifier.ToString());
         return;
     }
 
-    ActiveTasks.Add(Task);
-    RebuildSortedTasks();
-
+    ActiveQTEs.Add(QTE);
+    RebuildSortedQTEs();
+    
+    QTE->OnQuickTimeEventTimedOut.AddDynamic(this, &UQuickTimeEventSubsystem::UnregisterQuickTimeEvent);
+    
     if (CachedSettings && CachedSettings->bEnableDebugLogging)
     {
-        UE_LOG(LogTemp, Log, TEXT("QuickTimeEvent Task Registered: %s | Active Count: %d"),
-            *Task->GetDefinition().QuickTimeEventIdentifier.ToString(),
-            ActiveTasks.Num());
+        UE_LOG(LogTemp, Log, TEXT("QuickTimeEvent QTE Registered: %s | Active Count: %d"),
+            *QTE->GetDefinition().QuickTimeEventIdentifier.ToString(),
+            ActiveQTEs.Num());
     }
 }
 
-void UQuickTimeEventSubsystem::UnregisterQuickTimeEventTask(UQuickTimeEventTask* Task)
+void UQuickTimeEventSubsystem::UnregisterQuickTimeEvent(UQuickTimeEvent* QTE)
 {
-    if (!Task)
+    if (!QTE)
     {
         return;
     }
 
-    int32 RemovedCount = ActiveTasks.Remove(Task);
+    int32 RemovedCount = ActiveQTEs.Remove(QTE);
+    
+    QTE->OnQuickTimeEventTimedOut.RemoveDynamic(this, &UQuickTimeEventSubsystem::UnregisterQuickTimeEvent);
 
     if (RemovedCount > 0 && CachedSettings && CachedSettings->bEnableDebugLogging)
     {
-        UE_LOG(LogTemp, Log, TEXT("QuickTimeEvent Task Unregistered: %s | Active Count: %d"),
-            *Task->GetDefinition().QuickTimeEventIdentifier.ToString(),
-            ActiveTasks.Num());
+        UE_LOG(LogTemp, Log, TEXT("QuickTimeEvent QTE Unregistered: %s | Active Count: %d"),
+            *QTE->GetDefinition().QuickTimeEventIdentifier.ToString(),
+            ActiveQTEs.Num());
     }
 }
 
 bool UQuickTimeEventSubsystem::TryConsumeInput(FKey PressedKey)
 {
-    // Try to resolve with the highest priority task first
-    for (TObjectPtr<UQuickTimeEventTask>& Task : ActiveTasks)
+    for (TObjectPtr<UQuickTimeEvent>& QTE : ActiveQTEs)
     {
-        if (Task.Get() && Task->TryResolveWithInput(PressedKey))
-        {
-            return true; // Input was consumed
-        }
+        UQuickTimeEvent* QTEPtr = QTE.Get();
+        if (!QTEPtr)
+            continue;
+
+        if (!QTEPtr->IsActive())
+            continue;
+
+        if (IsKeyIgnored(QTEPtr, PressedKey))
+            continue;
+
+        const bool bCorrectKey = IsCorrectKey(QTEPtr, PressedKey);
+        const bool bFailsOnWrongKey = QTEPtr->GetDefinition().InputData.bWrongKeyFails;
+
+        if (!bCorrectKey && !bFailsOnWrongKey)
+            continue;
+
+        const float ElapsedTime = QTEPtr->GetElapsedTime();
+        const float Duration = QTEPtr->GetDefinition().Settings.Duration;
+
+        const float PerfectMin = Duration * QTEPtr->GetDefinition().Settings.PerfectRangeMin;
+        const float PerfectMax = Duration * QTEPtr->GetDefinition().Settings.PerfectRangeMax;
+
+        const bool bPerfect = (ElapsedTime >= PerfectMin && ElapsedTime <= PerfectMax);
+
+        QTEPtr->Complete(bCorrectKey, bPerfect);        
+        UnregisterQuickTimeEvent(QTEPtr);
+
+        return true;
     }
 
-    return false; // No task consumed the input
+    return false;
 }
 
-TArray<UQuickTimeEventTask*> UQuickTimeEventSubsystem::GetActiveQuickTimeEvents() const
+bool UQuickTimeEventSubsystem::IsKeyIgnored(const UQuickTimeEvent* QTE, const FKey& PressedKey) const
 {
-    TArray<UQuickTimeEventTask*> Result;
-    Result.Reserve(ActiveTasks.Num());
+    if (IsKeyGloballyIgnored(PressedKey))
+        return true;
+    
+    return QTE->GetDefinition().InputData.IgnoredKeys.Contains(PressedKey);
+}
 
-    for (const TObjectPtr<UQuickTimeEventTask>& Task : ActiveTasks)
+bool UQuickTimeEventSubsystem::IsCorrectKey(const UQuickTimeEvent* QTE, const FKey& PressedKey) const
+{
+    const FQuickTimeEventDefinition& Definition = QTE->GetDefinition();
+    
+    if (Definition.InputData.InputAction)
     {
-        if (Task.Get())
+        const auto PlayerController = GetWorld()->GetFirstPlayerController();
+        const ULocalPlayer* LocalPlayer = PlayerController ? PlayerController->GetLocalPlayer() : nullptr;
+
+        const UInputAction* InputAction = Definition.InputData.InputAction;
+
+        if (LocalPlayer)
         {
-            Result.Add(Task.Get());
+            if (UEnhancedInputLocalPlayerSubsystem* EnhancedInputSubsystem = LocalPlayer->GetSubsystem<
+                UEnhancedInputLocalPlayerSubsystem>())
+            {
+                TArray<FKey> OutKeys = EnhancedInputSubsystem->QueryKeysMappedToAction(InputAction);
+                return OutKeys.Contains(PressedKey);
+            }
+        }
+    }
+    
+    return Definition.InputData.TargetKey == PressedKey;
+}
+
+
+TArray<UQuickTimeEvent*> UQuickTimeEventSubsystem::GetActiveQuickTimeEvents() const
+{
+    TArray<UQuickTimeEvent*> Result;
+    Result.Reserve(ActiveQTEs.Num());
+
+    for (const TObjectPtr<UQuickTimeEvent>& QTE : ActiveQTEs)
+    {
+        if (QTE.Get())
+        {
+            Result.Add(QTE.Get());
         }
     }
 
     return Result;
 }
 
-bool UQuickTimeEventSubsystem::IsKeyGloballyIgnored(FKey Key) const
+bool UQuickTimeEventSubsystem::IsKeyGloballyIgnored(const FKey& Key) const
 {
     if (CachedSettings)
     {
@@ -109,27 +172,27 @@ bool UQuickTimeEventSubsystem::IsKeyGloballyIgnored(FKey Key) const
 void UQuickTimeEventSubsystem::CancelAllQuickTimeEvents()
 {
     // Create a copy to avoid modification during iteration
-    TArray<TObjectPtr<UQuickTimeEventTask>> TasksCopy = ActiveTasks;
+    TArray<TObjectPtr<UQuickTimeEvent>> QTEsCopy = ActiveQTEs;
 
-    for (TObjectPtr<UQuickTimeEventTask>& Task : TasksCopy)
+    for (TObjectPtr<UQuickTimeEvent>& QTE : QTEsCopy)
     {
-        if (Task.Get())
+        if (QTE.Get())
         {
-            Task->EndTask();
+            QTE->Cancel();
         }
     }
 
-    ActiveTasks.Empty();
+    ActiveQTEs.Empty();
 }
 
-void UQuickTimeEventSubsystem::RebuildSortedTasks()
+void UQuickTimeEventSubsystem::RebuildSortedQTEs()
 {
     Algo::SortBy(
-        ActiveTasks,
-        [](const TObjectPtr<UQuickTimeEventTask>& Task)
+        ActiveQTEs,
+        [](const TObjectPtr<UQuickTimeEvent>& QTE)
         {
-            UQuickTimeEventTask* RawTask = Task.Get();
-            return RawTask ? RawTask->GetPriority() : MIN_int32;
+            UQuickTimeEvent* RawQTE = QTE.Get();
+            return RawQTE ? RawQTE->GetPriority() : MIN_int32;
         },
         TGreater<>()
     );

@@ -24,11 +24,11 @@ public class QuickTimeEventsSystem : ModuleRules
 			new string[]
 			{
 				"Core",
-				"CoreUObject",        // Besoin pour UObject, UStruct, etc.
-				"Engine",             // Besoin pour AActor, UWorld, etc.
-				"EnhancedInput",      // Pour UInputAction
-				"GameplayTasks",      // IMPORTANT: Pour UGameplayTask !
-				"DeveloperSettings",  // Pour UDeveloperSettings
+				"CoreUObject",
+				"Engine",
+				"EnhancedInput",
+				"GameplayTasks",
+				"DeveloperSettings",
 			}
 		);
         
@@ -37,8 +37,8 @@ public class QuickTimeEventsSystem : ModuleRules
 			{
 				"Slate",
 				"SlateCore",
-				// InputCore peut être utile si tu veux des helpers pour FKey
-				"InputCore",
+				"InputCore", 
+				"GameplayAbilities", "NinjaInput",
 			}
 		);
         

@@ -11,7 +11,7 @@
  * Developer settings for the QTE Plugin
  * Accessible via Project Settings > Plugins > QTE System
  */
-UCLASS(config = Game, defaultconfig, meta = (DisplayName = "QuickTimeEvent System"))
+UCLASS(config = Game, ProjectUserConfig, meta = (DisplayName = "QuickTimeEvent System"))
 class QUICKTIMEEVENTSSYSTEM_API UQuickTimeEventDeveloperSettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
@@ -23,21 +23,9 @@ public:
 	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TArray<FKey> GlobalIgnoredKeys;
 
-	/** If true, QTE tasks will automatically register/unregister with the subsystem */
-	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "System")
-	bool bAutoRegisterTasks = true;
-
-	/** Default timing settings for QTEs when not specified */
-	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Defaults")
-	FQuickTimeEventSettings DefaultSettings;
-
 	/** Enable debug logging for QTE system */
 	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Debug")
-	bool bEnableDebugLogging = false;
-
-	/** Show on-screen debug info for active QTEs */
-	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Debug")
-	bool bShowDebugInfo = false;
+	bool bEnableDebugLogging = true;
 
 	// UDeveloperSettings interface
 	virtual FName GetCategoryName() const override { return TEXT("Plugins"); }
